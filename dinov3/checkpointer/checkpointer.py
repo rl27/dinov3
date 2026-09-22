@@ -24,6 +24,7 @@ Distributed checkpointer docs:
 - https://pytorch.org/docs/stable/distributed.checkpoint.html
 """
 
+import inspect
 import logging
 import shutil
 import subprocess
@@ -285,9 +286,23 @@ def init_fsdp_model_from_checkpoint(
             )
         else:
             world_mesh = DeviceMesh.from_group(process_group, "cuda")
+        # LOCAL PATCH (pedcv, 2026-09-16): `src_data_rank` was added to distribute_tensor in
+        # torch 2.7; this env is on 2.6.0, where passing it is a TypeError that kills the job
+        # at init_weights -- after the allocation is granted and before iteration 1, so no
+        # CPU pre-flight sees it. Dropping the kwarg is safe at this call site specifically:
+        # every rank has just torch.load-ed the same checkpoint file, so it already holds the
+        # identical full tensor, and torch 2.6 takes mesh coordinate 0 as the source of truth
+        # (Shard._shard_tensor scatters, Replicate._replicate_tensor broadcasts). The shards
+        # are therefore the same either way -- src_data_rank=None only skips the collective.
+        # Remove this guard, not the kwarg, if the env ever moves to torch >= 2.7.
+        _distribute_tensor = torch.distributed.tensor.distribute_tensor
+        if "src_data_rank" in inspect.signature(_distribute_tensor).parameters:
+            _distribute = lambda t: _distribute_tensor(t, world_mesh, src_data_rank=None)
+        else:
+            _distribute = lambda t: _distribute_tensor(t, world_mesh)
         chkpt = {
             key: (
-                torch.distributed.tensor.distribute_tensor(tensor, world_mesh, src_data_rank=None)
+                _distribute(tensor)
                 if not any(key_not_sharded in key for key_not_sharded in keys_not_sharded)
                 else tensor
             )

@@ -76,6 +76,7 @@ def validate(
     global_step,
     metric_to_save,
     current_best_metric_to_save_value,
+    reduce_zero_label: bool = True,
 ):
     new_metric_values_dict = evaluate_segmentation_model(
         segmentation_model,
@@ -86,6 +87,7 @@ def validate(
         decoder_head_type,
         num_classes,
         autocast_dtype,
+        reduce_zero_label=reduce_zero_label,  # LOCAL PATCH (pedcv) -- see eval.py
     )
     logger.info(f"Step {global_step}: {new_metric_values_dict}")
     # `segmentation_model` is a module list of [backbone, decoder]
@@ -295,6 +297,7 @@ def train_segmentation(
                 global_step,
                 config.metric_to_save,
                 global_best_metric_values[config.metric_to_save],
+                reduce_zero_label=config.eval.reduce_zero_label,  # LOCAL PATCH (pedcv)
             )
             if is_better:
                 logger.info(f"New best metrics at Step {global_step}: {best_metric_values_dict}")
@@ -314,6 +317,7 @@ def train_segmentation(
                 global_step,
                 config.metric_to_save,
                 global_best_metric_values[config.metric_to_save],
+                reduce_zero_label=config.eval.reduce_zero_label,  # LOCAL PATCH (pedcv)
             )
             if is_better:
                 logger.info(f"New best metrics at Step {global_step}: {best_metric_values_dict}")

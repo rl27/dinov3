@@ -35,7 +35,18 @@ def evaluate_segmentation_model(
     decoder_head_type,
     num_classes,
     autocast_dtype,
+    reduce_zero_label: bool = True,
 ):
+    # LOCAL PATCH (pedcv). reduce_zero_label used to be hardcoded True on the
+    # calculate_intersect_and_union call below, ignoring config.eval.reduce_zero_label
+    # -- which train.py DOES honour, in the train transform. For ADE20K the two agree
+    # and nothing is wrong. For any taxonomy where class 0 is real (ours:
+    # background=0, road=1, curb=2, sidewalk=3, crosswalk=4, terrain=5, void=255) they
+    # disagree: ground truth would be shifted down by one inside the metric while
+    # predictions are not, so every class is scored against the wrong index and
+    # background is dropped from mIoU entirely. The failure is silent -- it produces a
+    # plausible-looking low number, not an error. Default stays True to preserve
+    # upstream behaviour for callers that don't pass it.
     segmentation_model = segmentation_model.to(device)
     segmentation_model.eval()
     all_metric_values = []
@@ -63,7 +74,7 @@ def evaluate_segmentation_model(
             aggregated_preds[0],
             gt,
             num_classes=num_classes,
-            reduce_zero_label=True,
+            reduce_zero_label=reduce_zero_label,
         )
         all_metric_values.append(intersect_and_union)
         del img, gt, aggregated_preds, intersect_and_union
@@ -144,4 +155,5 @@ def test_segmentation(backbone, config):
         decoder_head_type=config.decoder_head.type,
         num_classes=config.decoder_head.num_classes,
         autocast_dtype=config.model_dtype.autocast_dtype,
+        reduce_zero_label=config.eval.reduce_zero_label,
     )

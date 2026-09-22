@@ -10,7 +10,7 @@ from typing import Any, Callable, List, Optional, TypeVar
 import torch
 from torch.utils.data import Sampler
 
-from .datasets import ADE20K, CocoCaptions, FMoW, HPAWholeHR, ImageNet, ImageNet22k, NYU
+from .datasets import ADE20K, CocoCaptions, FMoW, HPAWholeHR, ImageNet, ImageNet22k, Mapillary, NYU
 from .samplers import EpochSampler, InfiniteSampler, ShardedInfiniteSampler
 
 logger = logging.getLogger("dinov3")
@@ -51,7 +51,14 @@ def _parse_dataset_str(dataset_str: str):
 
     for token in tokens[1:]:
         key, value = token.split("=")
-        assert key in ("root", "extra", "split", "with_metadata")
+        assert key in (
+            "root", "extra", "split", "with_metadata", "image_root",
+            # pedcv downstream seg datasets: region/session slicing for the
+            # hold-one-out-region and session-disjoint protocols.
+            "region_field", "region", "exclude_region", "keep_unknown_region", "sessions",
+            # pedcv Mapillary corpus-composition knobs (SPEC.md Sec 5.1).
+            "min_quality", "vehicle_fraction", "sample_seed",
+        ), f"unsupported dataset kwarg {key!r}"
         kwargs[key] = value
 
     if name == "ImageNet":
@@ -80,6 +87,32 @@ def _parse_dataset_str(dataset_str: str):
             kwargs["split"] = _Split[kwargs["split"]]
         if "with_metadata" in kwargs:
             kwargs["with_metadata"] = kwargs["with_metadata"].lower() in ("true", "1", "yes")
+    elif name == "Mapillary":
+        from .datasets.mapillary import _Split
+
+        class_ = Mapillary
+        if "split" in kwargs:
+            kwargs["split"] = _Split[kwargs["split"]]
+        if "with_metadata" in kwargs:
+            kwargs["with_metadata"] = kwargs["with_metadata"].lower() in ("true", "1", "yes")
+        # The descriptor is a string, so these arrive as strings; the dataset's defaults
+        # are numeric and a string would compare wrong rather than raise.
+        for key in ("min_quality", "vehicle_fraction"):
+            if key in kwargs:
+                kwargs[key] = float(kwargs[key])
+        if "sample_seed" in kwargs:
+            kwargs["sample_seed"] = int(kwargs["sample_seed"])
+    elif name in ("Vistas", "Sanpo"):
+        if name == "Vistas":
+            from .datasets.pedcv_seg import Vistas as class_
+            from .datasets.pedcv_seg import _VistasSplit as _SegSplit
+        else:
+            from .datasets.pedcv_seg import Sanpo as class_
+            from .datasets.pedcv_seg import _SanpoSplit as _SegSplit
+        if "split" in kwargs:
+            kwargs["split"] = _SegSplit[kwargs["split"]]
+        if "keep_unknown_region" in kwargs:
+            kwargs["keep_unknown_region"] = kwargs["keep_unknown_region"].lower() in ("true", "1", "yes")
     elif name == "HPAWholeHR":
         from .datasets.hpa_whole_hr import _Split
 

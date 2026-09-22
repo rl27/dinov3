@@ -9,4 +9,6 @@ from .fmow import FMoW
 from .hpa_whole_hr import HPAWholeHR
 from .image_net import ImageNet
 from .image_net_22k import ImageNet22k
+from .mapillary import Mapillary
+from .pedcv_seg import Sanpo, Vistas
 from .nyu import NYU
