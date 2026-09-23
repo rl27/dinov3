@@ -271,11 +271,11 @@ class GuidedSSLMetaArch(SSLMetaArch):
         """Equalize gradient magnitudes *between* the individual guide losses.
 
         Each guide's contribution is rescaled so its gradient w.r.t. the student
-        CLS pre-head matches the geometric mean of all guide gradient norms,
-        preventing any single guide from dominating. The SSL loss is not part
-        of this normalization. Per-guide ``loss_weight`` (already baked into
-        ``per_guide_weighted``) is preserved as a multiplier on top of the
-        normalized contribution.
+        CLS pre-head is its ``loss_weight`` times the geometric mean of the
+        *unweighted* guide gradient norms, so no guide dominates by raw gradient
+        scale and ``loss_weight`` alone sets the ratio between guides. The SSL
+        loss is not part of this normalization. ``grad_norm/<guide>`` logs the
+        weighted norm before rescaling; ``grad_norm/target`` the unweighted target.
 
         Uses ``torch.autograd.grad`` on an intermediate activation (not a
         sharded parameter) so it stays FSDP-safe.
@@ -284,41 +284,68 @@ class GuidedSSLMetaArch(SSLMetaArch):
         device = backbone_output.device
         eps = 1e-6
 
-        norms: dict[str, Tensor] = {}
+        local_norms: list[Tensor] = []
         for name in names:
             grad = torch.autograd.grad(
                 per_guide_weighted[name], backbone_output, retain_graph=True, allow_unused=True
             )[0]
-            norm = (
+            local_norms.append(
                 grad.float().norm()
                 if grad is not None
                 else torch.tensor(0.0, device=device)
             )
-            norms[name] = norm
-            loss_dict[f"grad_norm/{name}"] = norm
+
+        # LOCAL PATCH (pedcv): branch on norms averaged across ranks, not per-rank norms.
+        # The norms above are of each rank's LOCAL gradient, and the eps test below used to
+        # run on those. The year guide's (GRL) norm hovers around eps, so now and then it
+        # cleared eps on one rank only: that rank added grad_norm/target and
+        # grad_norm/<guide>_scale (3 extra metric keys) while the others returned early, and
+        # train.py's all_reduce of the stacked metrics then got 24 elements on one rank and
+        # 21 on the rest -> NCCL hang -> watchdog SIGABRT. Every hang of the ViT-L run on
+        # 2026-09-22/23 had exactly that 24-vs-21 fingerprint. It also meant only some ranks
+        # rescaled their guide gradients before FSDP averaged them. Averaging first makes
+        # every rank take the same branch, emit the same keys and apply the same scale.
+        stacked_norms = torch.stack(local_norms)
+        if distributed.is_enabled():
+            torch.distributed.all_reduce(
+                stacked_norms,
+                op=torch.distributed.ReduceOp.AVG,
+                group=distributed.get_process_subgroup(),
+            )
+        norms: dict[str, Tensor] = dict(zip(names, stacked_norms.unbind(0)))
+        for name in names:
+            loss_dict[f"grad_norm/{name}"] = norms[name]
 
         # Geometric mean target across guides with non-vanishing gradients.
-        valid_norms = [norms[n] for n in names if float(norms[n]) > eps]
-        if len(valid_norms) < 2:
-            # Nothing meaningful to equalize against; fall back to plain sum.
+        valid = [n for n in names if float(norms[n]) > eps and per_guide_weights.get(n, 1.0) != 0.0]
+        if len(valid) < 2:
+            # Nothing meaningful to equalize against; fall back to plain sum. Emit the same
+            # keys as the normalizing branch anyway, so the metric set never depends on it.
+            loss_dict["grad_norm/target"] = torch.tensor(0.0, device=device)
+            for name in names:
+                loss_dict[f"grad_norm/{name}_scale"] = torch.tensor(1.0, device=device)
             return sum(per_guide_weighted.values())
 
-        log_sum = sum(torch.log(n + 1e-12) for n in valid_norms)
-        target_norm = torch.exp(log_sum / len(valid_norms))
+        # LOCAL PATCH (pedcv): equalize the UNWEIGHTED gradient norms, then let loss_weight
+        # set the ratio. `norms` are of the weighted losses, and upstream equalized those
+        # directly, so every guide got the same gradient norm whatever its loss_weight: its
+        # `weight * (scale * (weighted / weight))` stripped and reapplied the weight around
+        # a scale that had already absorbed it, a no-op. Here guide i's gradient norm on the
+        # CLS pre-head comes out as loss_weight_i * target, as the docstring intends.
+        unweighted = {n: norms[n] / per_guide_weights.get(n, 1.0) for n in valid}
+        log_sum = sum(torch.log(unweighted[n] + 1e-12) for n in valid)
+        target_norm = torch.exp(log_sum / len(valid))
         loss_dict["grad_norm/target"] = target_norm
 
         contribution: Tensor | float = 0.0
         for name in names:
-            norm = norms[name]
             weighted = per_guide_weighted[name]
-            weight = per_guide_weights.get(name, 1.0)
-            if float(norm) < eps or weight == 0.0:
+            if name in unweighted:
+                scale = target_norm / (unweighted[name] + 1e-8)
+                normalized = scale * weighted
+            else:
                 scale = torch.tensor(1.0, device=device)
                 normalized = weighted
-            else:
-                # Strip the original weight, equalize, then reapply the weight.
-                scale = target_norm / (norm + 1e-8)
-                normalized = weight * (scale * (weighted / weight))
             loss_dict[f"grad_norm/{name}_scale"] = scale
             contribution = normalized if isinstance(contribution, float) else contribution + normalized
 

@@ -53,7 +53,7 @@ class _Metadata:
     """Per-image metadata. Field names MUST match ``guide.guides[*].name`` in the config."""
 
     # --- the two-guide reference recipe (mirrors vitl16_fmow_guided.yaml) ---
-    sub_region: int          # UN subregion from lat/lon (20 classes) -- informative guide
+    sub_region: int          # UN subregion from lat/lon (19; Melanesia merged into ANZ) -- informative guide
     year: int                # capture year index, 2011-2026 (16 classes) -- adversarial guide
     # --- sweep candidates, one at a time (what FINO's Fig. 4 does) ---
     transport_mode: int      # walk / vehicle (2 classes)
