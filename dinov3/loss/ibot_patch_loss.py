@@ -69,7 +69,12 @@ class iBOTPatchLoss(nn.Module):
         self.len_teacher_patch_tokens = None
         self.async_batch_center = None
         self.sinkhorn_knopp_teacher = SinkhornKnoppTeacher()
-        self.sinkhorn_knopp_teacher.compile()
+        # LOCAL PATCH (pedcv): dynamic=True. Under torch 2.6, a static-shape compile of this module
+        # returns all-NaN once the input has > 2**31 elements (masked patches x prototypes), e.g.
+        # 33,547 x 65,536 at 256 px / 439 per GPU. The first call is compiled static, and the masked
+        # count is fixed by the batch size, so such a run never recompiles and iBOT is NaN from
+        # iteration 0. Dynamic kernels are correct at that size (and use less memory than eager).
+        self.sinkhorn_knopp_teacher.compile(dynamic=True)
 
     def init_weights(self) -> None:
         self.center.zero_()
