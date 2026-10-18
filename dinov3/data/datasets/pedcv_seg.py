@@ -234,6 +234,11 @@ class Sanpo(ExtendedVisionDataset):
 
     Depth lives alongside as ``depth/<stem>.float16.gz`` at a different resolution to
     the images, and is handled by the separate depth reader rather than here.
+
+    ``dirname`` selects the copy under ``root``: ``sanpo`` (default; full-resolution PNG, every
+    frame) or ``sanpo_480`` (``scripts/resize_sanpo.py``: the human-annotated frames only, short
+    side 480, images JPEG). Images may be ``.png`` or ``.jpg``; a directory holding both is
+    refused. ``sanpo_480`` has no depth.
     """
 
     Split = Union[_SanpoSplit]
@@ -249,6 +254,7 @@ class Sanpo(ExtendedVisionDataset):
         image_decoder: Decoder = ImageDataDecoder,
         target_decoder: Decoder = DenseTargetDecoder,
         sessions: Union[str, Sequence[str], None] = None,
+        dirname: str = "sanpo",
     ) -> None:
         super().__init__(
             root=root,
@@ -259,14 +265,19 @@ class Sanpo(ExtendedVisionDataset):
             target_decoder=target_decoder,
         )
         self.split = split
-        base = os.path.join(root, "sanpo", split.dirname)
+        base = os.path.join(root, dirname, split.dirname)
         self._image_dir = os.path.join(base, "images")
         self._label_dir = os.path.join(base, "segmentation")
         self._depth_dir = os.path.join(base, "depth")
         if not os.path.isdir(self._image_dir):
             raise FileNotFoundError(f"{self._image_dir} not found")
 
-        stems = sorted(os.path.splitext(f)[0] for f in os.listdir(self._image_dir) if f.endswith(".png"))
+        files = os.listdir(self._image_dir)
+        exts = {os.path.splitext(f)[1] for f in files} & {".png", ".jpg"}
+        if len(exts) != 1:
+            raise ValueError(f"{self._image_dir}: expected only .png or only .jpg images, found {sorted(exts)}")
+        self._image_ext = exts.pop()
+        stems = sorted(os.path.splitext(f)[0] for f in files if f.endswith(self._image_ext))
         have = {os.path.splitext(f)[0] for f in os.listdir(self._label_dir) if f.endswith(".png")}
         missing = [s for s in stems if s not in have]
         if missing:
@@ -284,7 +295,7 @@ class Sanpo(ExtendedVisionDataset):
         self._sessions: Tuple[str, ...] = tuple(_sanpo_session(s) for s in stems)
 
     def get_image_data(self, index: int) -> bytes:
-        with open(os.path.join(self._image_dir, self._stems[index] + ".png"), "rb") as f:
+        with open(os.path.join(self._image_dir, self._stems[index] + self._image_ext), "rb") as f:
             return f.read()
 
     def get_target(self, index: int) -> Any:

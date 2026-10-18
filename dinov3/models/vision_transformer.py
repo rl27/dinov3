@@ -329,6 +329,21 @@ class DinoVisionTransformer(nn.Module):
             return self.head(ret["x_norm_clstoken"])
 
 
+# LOCAL PATCH (pedcv): ViT-Tiny (DeiT-Ti shape: 192 wide, 12 deep, 3 heads). No DINOv3
+# release exists at this size, so it is only ever built from random init (SSL from scratch
+# or distillation). Added for an on-device latency test of a sub-ViT-S encoder.
+def vit_tiny(patch_size=16, **kwargs):
+    model = DinoVisionTransformer(
+        patch_size=patch_size,
+        embed_dim=192,
+        depth=12,
+        num_heads=3,
+        ffn_ratio=4,
+        **kwargs,
+    )
+    return model
+
+
 def vit_small(patch_size=16, **kwargs):
     model = DinoVisionTransformer(
         patch_size=patch_size,

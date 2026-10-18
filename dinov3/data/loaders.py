@@ -56,6 +56,8 @@ def _parse_dataset_str(dataset_str: str):
             # pedcv downstream seg datasets: region/session slicing for the
             # hold-one-out-region and session-disjoint protocols.
             "region_field", "region", "exclude_region", "keep_unknown_region", "sessions",
+            # pedcv SANPO copy under root (sanpo = full res, sanpo_480 = resize_sanpo.py).
+            "dirname",
             # pedcv Mapillary corpus-composition knobs (SPEC.md Sec 5.1).
             "min_quality", "vehicle_fraction", "sample_seed",
         ), f"unsupported dataset kwarg {key!r}"
