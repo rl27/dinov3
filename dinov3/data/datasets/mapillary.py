@@ -60,6 +60,7 @@ class _Metadata:
     country: int             # crawl ISO country code (166 classes)
     camera_make: int         # camera manufacturer (526 classes)
     camera_type: int         # perspective / fisheye / ... (5 classes)
+    camera_group: int        # camera make bucketed to 15 makes + other + unknown (17 classes)
     month: int               # 0-indexed (12 classes)
     season: int              # hemisphere-corrected (4 classes)
     hour_local: int          # local solar hour from longitude (24 classes)
@@ -153,6 +154,11 @@ def _load_manifest(
         df = _apply_vehicle_fraction(df, vehicle_fraction, sample_seed)
 
     df = df.reset_index(drop=True)
+    if "camera_group_id" not in df.columns:
+        # The collate step stacks every _Metadata field, so a manifest
+        # without this column cannot be given a placeholder without risking a silent class.
+        raise KeyError(f"{manifest} has no camera_group_id column -- rebuild it with "
+                       "scripts/build_manifest.py (and subsample_manifest.py for a subsample).")
 
     paths = tuple(df["path"].tolist())
 
@@ -162,13 +168,14 @@ def _load_manifest(
     meta = tuple(
         _Metadata(
             sub_region=int(sr), year=int(yr), transport_mode=int(tm), country=int(co),
-            camera_make=int(mk), camera_type=int(ct), month=int(mo), season=int(se),
-            hour_local=int(hl), coordinates=(float(la), float(lo)), quality_score=float(qs),
+            camera_make=int(mk), camera_type=int(ct), camera_group=int(cg), month=int(mo),
+            season=int(se), hour_local=int(hl), coordinates=(float(la), float(lo)),
+            quality_score=float(qs),
         )
-        for sr, yr, tm, co, mk, ct, mo, se, hl, la, lo, qs in zip(
+        for sr, yr, tm, co, mk, ct, cg, mo, se, hl, la, lo, qs in zip(
             col("subregion_id"), col("year_id"), col("transport_mode_id"), col("country_id"),
-            col("camera_make_id"), col("camera_type_id"), col("month"), col("season"),
-            col("hour_local"),
+            col("camera_make_id"), col("camera_type_id"), col("camera_group_id"), col("month"),
+            col("season"), col("hour_local"),
             df["lat_norm"].fillna(0.5).to_numpy(), df["lon_norm"].fillna(0.5).to_numpy(),
             df["quality_score"].fillna(0.0).to_numpy(),
         )
